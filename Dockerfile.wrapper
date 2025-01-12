@@ -1,0 +1,45 @@
+# Stage 1: Pull or build the Ollama image
+FROM ollama/ollama AS ollama
+
+# Stage 2: Start from the user’s image
+FROM userimage AS user
+
+# Stage 3: Combine them in the final image
+FROM ubuntu:22.04
+
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+
+
+ARG USER_ENTRYPOINT_SHELL=""
+ARG USER_CMD_SHELL=""
+
+# # Add jq package
+# RUN apk add --no-cache jq
+
+# (A) Copy user’s entire filesystem
+#     Or you can be more selective (just the binary, for instance).
+# copies everything from userimage
+# This might or might not be what you want,
+# depending on how userimage is structured.
+COPY --from=user /app /app   
+
+# (B) Copy Ollama binaries
+COPY --from=ollama /bin/ollama /bin/ollama
+# If you need additional dirs for models, copy them too.
+# e.g. COPY --from=ollama /root/.ollama /root/.ollama
+
+# (C) Pass the user’s Entrypoint & Cmd in as build-args => env vars
+ENV USER_ENTRYPOINT_SHELL="$USER_ENTRYPOINT_SHELL"
+ENV USER_CMD_SHELL="$USER_CMD_SHELL"
+
+# (D) Copy in your start-all.sh
+COPY start-all.sh /start-all.sh
+RUN chmod +x /start-all.sh
+
+# (E) Expose the relevant ports (if you want)
+EXPOSE 11434   
+EXPOSE 8080    
+
+# (F) Finally, all containers launched from this image
+# will run start-all.sh by default.
+ENTRYPOINT ["/start-all.sh"]
