@@ -2,7 +2,7 @@ FROM ghcr.io/tinfoilanalytics/nitro-attestation-shim:v0.2.2 AS shim
 
 FROM ollama/ollama AS ollama
 
-FROM golang:1.21 AS build
+FROM golang:1.22 AS build
 
 WORKDIR /app
 COPY main.go go.mod ./
