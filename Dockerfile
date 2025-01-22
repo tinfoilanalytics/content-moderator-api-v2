@@ -5,7 +5,7 @@ FROM ollama/ollama AS ollama
 FROM golang:1.21 AS build
 
 WORKDIR /app
-COPY main.go go.mod go.sum ./
+COPY main.go go.mod ./
 RUN CGO_ENABLED=0 GOOS=linux go build -o /contentmod main.go
 
 FROM alpine:3
