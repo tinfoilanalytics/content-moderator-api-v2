@@ -171,6 +171,33 @@ func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+func handleOllamaHealth(w http.ResponseWriter, r *http.Request) {
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, ollamaURL+"/api/version", nil)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("creating version request: %v", err), http.StatusServiceUnavailable)
+		return
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("connecting to Ollama: %v", err), http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		http.Error(w, fmt.Sprintf("unexpected version status code %d: %s", resp.StatusCode, body), http.StatusBadGateway)
+		return
+	}
+
+	w.Write([]byte("ollama: "))
+	// Forward the version response to the client
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		log.Printf("Error copying response: %v", err)
+	}
+}
+
 func main() {
 	mux := http.NewServeMux()
 
@@ -178,6 +205,8 @@ func main() {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("Content moderation service is running"))
 	})
+
+	mux.HandleFunc("/api/health", corsMiddleware(handleOllamaHealth))
 
 	// Analysis endpoint
 	mux.HandleFunc("/api/analyze", corsMiddleware(handleAnalyze))
