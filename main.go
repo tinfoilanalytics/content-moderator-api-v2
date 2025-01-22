@@ -1,20 +1,20 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"strings"
-
-	"github.com/replicate/replicate-go"
 )
 
 const (
 	systemPrompt = `You are a content moderator. Analyze the following text and respond with 'safe' if the content is safe, or 'unsafe' followed by the category codes (e.g., 'unsafe\nS1,S2') if any violations are detected.`
-	modelID      = "meta/llama-guard-3-8b:146d1220d447cdcc639bc17c5f6137416042abee6ae153a2615e6ef5749205c8"
+	modelName    = "llama-guard3:1b"
 )
 
 type analyzeRequest struct {
@@ -32,12 +32,26 @@ type analysisResult struct {
 	IsSafe  bool           `json:"is_safe"`
 }
 
-type server struct {
-	client *replicate.Client
+type ollamaRequest struct {
+	Model    string    `json:"model"`
+	Messages []Message `json:"messages"`
 }
 
-func newServer(client *replicate.Client) *server {
-	return &server{client: client}
+type Message struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type ollamaResponse struct {
+	Message Message `json:"message"`
+}
+
+type server struct {
+	ollamaURL string
+}
+
+func newServer(ollamaURL string) *server {
+	return &server{ollamaURL: ollamaURL}
 }
 
 func (s *server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
@@ -74,21 +88,42 @@ func (s *server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) analyzeMessage(ctx context.Context, message string) (analysisResult, error) {
-	input := replicate.PredictionInput{
-		"prompt":        message,
-		"system_prompt": systemPrompt,
+	ollamaReq := ollamaRequest{
+		Model: modelName,
+		Messages: []Message{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: message},
+		},
 	}
 
-	output, err := s.client.Run(ctx, modelID, input, nil)
+	reqBody, err := json.Marshal(ollamaReq)
 	if err != nil {
-		return analysisResult{}, fmt.Errorf("running model: %w", err)
+		return analysisResult{}, fmt.Errorf("marshaling request: %w", err)
 	}
 
-	outputStr, ok := output.(string)
-	if !ok {
-		return analysisResult{}, fmt.Errorf("unexpected output type: %T", output)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.ollamaURL+"/v1/chat/completions", bytes.NewReader(reqBody))
+	if err != nil {
+		return analysisResult{}, fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return analysisResult{}, fmt.Errorf("making request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return analysisResult{}, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, body)
 	}
 
+	var ollamaResp ollamaResponse
+	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
+		return analysisResult{}, fmt.Errorf("decoding response: %w", err)
+	}
+
+	outputStr := ollamaResp.Message.Content
 	violations := parseViolations(outputStr)
 	result := analysisResult{
 		Content: message,
@@ -144,17 +179,22 @@ func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func main() {
-	client, err := replicate.NewClient(replicate.WithTokenFromEnv())
-	if err != nil {
-		log.Fatalf("Error creating Replicate client: %v", err)
+	ollamaURL := os.Getenv("OLLAMA_URL")
+	if ollamaURL == "" {
+		ollamaURL = "http://localhost:11434"
 	}
 
-	srv := newServer(client)
+	srv := newServer(ollamaURL)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/analyze", corsMiddleware(srv.handleAnalyze))
 
-	addr := ":" + os.Getenv("PORT")
-	log.Printf("Server starting on %s", addr)
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	addr := ":" + port
+
+	log.Printf("Server starting on %s, connecting to Ollama at %s", addr, ollamaURL)
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatal(err)
 	}
