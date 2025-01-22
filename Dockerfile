@@ -15,14 +15,11 @@ COPY --from=shim   /nitro-attestation-shim /nitro-attestation-shim
 COPY --from=ollama /bin/ollama            /bin/ollama
 COPY --from=build  /contentmod            /contentmod
 
+# Copy the start script
+COPY start.sh /start.sh
+RUN chmod +x /start.sh
+
 ENV HOME=/
 ENV PORT=80
-
-RUN echo '#!/bin/sh\n\
-    ollama serve &\n\
-    sleep 5\n\
-    ollama pull llama-guard3:1b\n\
-    exec /contentmod\n' \
-    > /start.sh && chmod +x /start.sh
 
 ENTRYPOINT ["/nitro-attestation-shim", "-e", "tls@tinfoil.sh", "-u", "80", "--", "/start.sh"]
