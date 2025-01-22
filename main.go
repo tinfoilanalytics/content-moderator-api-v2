@@ -15,6 +15,7 @@ import (
 const (
 	systemPrompt = `You are a content moderator. Analyze the following text and respond with 'safe' if the content is safe, or 'unsafe' followed by the category codes (e.g., 'unsafe\nS1,S2') if any violations are detected.`
 	modelName    = "llama-guard3:1b"
+	ollamaURL    = "http://localhost:11434"
 )
 
 type analyzeRequest struct {
@@ -46,15 +47,7 @@ type ollamaResponse struct {
 	Message Message `json:"message"`
 }
 
-type server struct {
-	ollamaURL string
-}
-
-func newServer(ollamaURL string) *server {
-	return &server{ollamaURL: ollamaURL}
-}
-
-func (s *server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
+func handleAnalyze(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -73,7 +66,7 @@ func (s *server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 
 	results := make([]analysisResult, 0, len(req.Messages))
 	for _, message := range req.Messages {
-		result, err := s.analyzeMessage(r.Context(), message)
+		result, err := analyzeMessage(r.Context(), message)
 		if err != nil {
 			log.Printf("Error analyzing message '%s': %v", message, err)
 			continue
@@ -87,7 +80,7 @@ func (s *server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *server) analyzeMessage(ctx context.Context, message string) (analysisResult, error) {
+func analyzeMessage(ctx context.Context, message string) (analysisResult, error) {
 	ollamaReq := ollamaRequest{
 		Model: modelName,
 		Messages: []Message{
@@ -101,7 +94,7 @@ func (s *server) analyzeMessage(ctx context.Context, message string) (analysisRe
 		return analysisResult{}, fmt.Errorf("marshaling request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.ollamaURL+"/v1/chat/completions", bytes.NewReader(reqBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ollamaURL+"/api/chat", bytes.NewReader(reqBody))
 	if err != nil {
 		return analysisResult{}, fmt.Errorf("creating request: %w", err)
 	}
@@ -179,22 +172,23 @@ func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func main() {
-	ollamaURL := os.Getenv("OLLAMA_URL")
-	if ollamaURL == "" {
-		ollamaURL = "http://localhost:11434"
-	}
-
-	srv := newServer(ollamaURL)
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/analyze", corsMiddleware(srv.handleAnalyze))
+
+	// Health check endpoint
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("Content moderation service is running"))
+	})
+
+	// Analysis endpoint
+	mux.HandleFunc("/api/analyze", corsMiddleware(handleAnalyze))
 
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080"
+		port = "80"
 	}
 	addr := ":" + port
 
-	log.Printf("Server starting on %s, connecting to Ollama at %s", addr, ollamaURL)
+	log.Printf("Server starting on %s", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatal(err)
 	}
